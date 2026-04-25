@@ -55,7 +55,7 @@ public class ModelLoaderService {
     
     #if os(macOS)
     public func openModelFolder() {
-        folderStore.openBaseDirectory()
+        modelDirectoryManager.openBaseDirectory()
     }
     #endif
 }
