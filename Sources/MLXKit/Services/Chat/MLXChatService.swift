@@ -38,46 +38,6 @@ public struct ModelMessage {
         ]
     }
     
-    /**
-     Prompt:
-     There was currently a new video by SideQuest Drew about exploring epsteins new island, can u look up the free version of the video?
-     */
-    static let searchTool: [String: any Sendable] = [
-        "type": "function",
-        "function": [
-            "name": "search",
-            "description": "Search the web for information",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "query": [
-                        "type": "string",
-                        "description": "The search query"
-                    ] as [String: any Sendable]
-                ] as [String: any Sendable],
-                "required": ["query"]
-            ] as [String: any Sendable]
-        ] as [String: any Sendable]
-    ]
-    
-    static let clickLinkTool: [String: any Sendable] = [
-        "type": "function",
-        "function": [
-            "name": "clickLink",
-            "description": "Open one of the numbered links from the current browser page.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "index": [
-                        "type": "integer",
-                        "description": "The 1-based number of the link to open from the current page's Links list."
-                    ] as [String: any Sendable]
-                ] as [String: any Sendable],
-                "required": ["index"]
-            ] as [String: any Sendable]
-        ] as [String: any Sendable]
-    ]
-    
     public init(role: String, content: String) {
         self.role = role
         self.content = content
@@ -156,6 +116,7 @@ public final class MLXChatService {
     
     public func getResponse(
         messages: [ModelMessage],
+        tools: [[String: any Sendable]],
         completion: @Sendable @escaping (String) -> Void,
         toolcallCompletionHandler: @Sendable @escaping (ToolCallResponse) -> Void
     ) async throws -> String {
@@ -174,10 +135,7 @@ public final class MLXChatService {
                 .prepare(
                     input: .init(
                         messages: safeMessages,
-                        tools: [
-                            ModelMessage.searchTool,
-                            ModelMessage.clickLinkTool
-                        ]
+                        tools: tools
                     )
                 )
             
