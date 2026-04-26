@@ -1,6 +1,6 @@
 //
 //  MLXChatService.swift
-//  ModelChat
+//  MLXKit
 //
 //  Created by Aryan Rogye on 4/5/26.
 //
@@ -20,52 +20,39 @@ public enum MLXModelChatVideoModelError: Error {
 }
 
 /**
- * This is the message getting sent to every LLM
+ * Represents a message formatted for a language model.
  */
 public struct ModelMessage {
-    public var role: String
+    public var role: Role
     public var content: String
-    public var toolCalls: [ToolCall]?
     
-    public var isToolCall: Bool {
-        toolCalls != nil
-    }
-    
-    public var message: [String: any Sendable] {
+    public var representation: [String: any Sendable] {
         return [
-            "role": role,
+            "role": role.rawValue,
             "content": content
         ]
     }
     
-    public init(role: String, content: String) {
+    public init(role: Role, content: String) {
         self.role = role
         self.content = content
     }
 }
 
-public struct ToolCall {
-    public var id: String
-    public var name: String
-    public var arguments: String
+/**
+ * The role of a message in a language model conversation.
+ */
+public enum Role: String, Equatable, Sendable {
+    case user
+    case assistant
+    case system
 }
 
-public struct SearchToolArguments: Codable {
-    public let query: String
-    
-    public init(query: String) {
-        self.query = query
-    }
-}
-
-public struct ClickTookArguments: Codable {
-    public let index: Int
-    
-    public init(index: Int) {
-        self.index = index
-    }
-}
-
+/**
+ * Container for a tool call response.
+ *
+ * Encapsulates the function name and its arguments.
+ */
 public struct ToolCallResponse: Sendable {
     public let functionName: String
     public let arguments: [String: JSONValue]
@@ -93,7 +80,10 @@ public final class MLXChatService {
     
     public init() {
     }
-    
+}
+
+// MARK: - Load Model
+extension MLXChatService {
     public func loadModel(
         at url: URL
     ) async throws {
@@ -112,8 +102,10 @@ public final class MLXChatService {
             throw MLXModelChatVideoModelError.errorWhileLoadingContainer(error.localizedDescription)
         }
     }
-    
-    
+}
+
+// MARK: - Get Response
+extension MLXChatService {
     public func getResponse(
         messages: [ModelMessage],
         tools: [[String: any Sendable]],
@@ -127,7 +119,7 @@ public final class MLXChatService {
             throw MLXModelChatVideoModelError.containerNotConfigured
         }
         let safeMessages = messages.map { msg in
-            msg.message
+            msg.representation
         }
         return try await container.perform { context in
             let input = try await context
