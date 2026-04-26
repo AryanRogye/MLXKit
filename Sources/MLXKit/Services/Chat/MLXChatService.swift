@@ -17,6 +17,7 @@ public enum MLXModelChatVideoModelError: Error {
     case errorWhileLoadingContainer(String)
     case containerNotConfigured
     case cantGenerateResponseNotLoaded
+    case cantReload(String)
 }
 
 /**
@@ -68,6 +69,8 @@ public struct ToolCallResponse: Sendable {
 public final class MLXChatService {
     
     public var modelPath: URL?
+    public var defaultPrompt: String?
+    
     public var modelConfig: ModelConfiguration?
     public var container: ModelContainer?
     
@@ -84,23 +87,52 @@ public final class MLXChatService {
 
 // MARK: - Load Model
 extension MLXChatService {
+    /**
+     * Load Model
+     * using default for defaultPrompt as hello is the same thing what mlx does
+     */
     public func loadModel(
-        at url: URL
+        at url: URL,
+        defaultPrompt: String = "hello"
     ) async throws {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw MLXModelChatVideoModelError.modelDoesntExist
         }
         let modelURL = url
-        let modelConfig = ModelConfiguration(directory: url)
+        let modelConfig = ModelConfiguration(
+            directory: url,
+            defaultPrompt: defaultPrompt
+        )
         
         do {
             let container = try await LLMModelFactory.shared.loadContainer(configuration: modelConfig)
+            self.defaultPrompt = defaultPrompt
             self.modelPath = modelURL
             self.modelConfig = modelConfig
             self.container = container
         } catch {
             throw MLXModelChatVideoModelError.errorWhileLoadingContainer(error.localizedDescription)
         }
+    }
+}
+
+extension MLXChatService {
+    public func unload() {
+        modelConfig = nil
+        container = nil
+        MLX.Memory.clearCache()
+    }
+    public func reload() async throws {
+        guard let modelPath else {
+            throw MLXModelChatVideoModelError.cantReload("Model Path is nil")
+        }
+        guard let defaultPrompt else {
+            throw MLXModelChatVideoModelError.cantReload("Default Prompt is nil")
+        }
+        try await loadModel(
+            at: modelPath,
+            defaultPrompt: defaultPrompt
+        )
     }
 }
 

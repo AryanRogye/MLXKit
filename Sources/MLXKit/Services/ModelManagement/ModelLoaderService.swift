@@ -48,9 +48,13 @@ public class ModelLoaderService {
     private var downloadDecisionContinuation: CheckedContinuation<Bool, Never>?
 
     
-    public init() {
+    public init(selectFirst: Bool = false) {
         self.downloadModelService = ModelDownloadService(store: modelDirectoryManager)
         sync()
+        
+        if selectFirst {
+            selected = models.first
+        }
     }
     
     #if os(macOS)
