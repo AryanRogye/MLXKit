@@ -83,6 +83,15 @@ public final class MLXChatService {
     
     public init() {
     }
+    
+    public func setMLXMemory(limitInMB: Int) {
+        let bytes = limitInMB * 1024 * 1024
+        MLX.Memory.cacheLimit = bytes
+        
+        // Pro Tip: Clear the current cache so the new limit
+        // is enforced against a fresh slate.
+        MLX.GPU.clearCache()
+    }
 }
 
 // MARK: - Load Model
@@ -116,6 +125,7 @@ extension MLXChatService {
     }
 }
 
+// MARK: - Loading/Unloading
 extension MLXChatService {
     public func unload() {
         modelConfig = nil
@@ -142,7 +152,8 @@ extension MLXChatService {
         messages: [ModelMessage],
         tools: [[String: any Sendable]],
         completion: @Sendable @escaping (String) -> Void,
-        toolcallCompletionHandler: @Sendable @escaping (ToolCallResponse) -> Void
+        toolcallCompletionHandler: @Sendable @escaping (ToolCallResponse) -> Void,
+        infoCompletionHandler: @Sendable @escaping (GenerateCompletionInfo) -> Void
     ) async throws -> String {
         guard isLoaded else {
             throw MLXModelChatVideoModelError.cantGenerateResponseNotLoaded
@@ -172,6 +183,9 @@ extension MLXChatService {
             )
             var output = ""
             for await generation in stream {
+                if let info = generation.info {
+                    infoCompletionHandler(info)
+                }
                 if let chunk = generation.chunk {
                     
                     output += chunk
