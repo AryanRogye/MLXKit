@@ -26,17 +26,29 @@ public enum MLXModelChatVideoModelError: Error {
 public struct ModelMessage {
     public var role: Role
     public var content: String
+    public var toolCalls: [[String: any Sendable]]?
     
     public var representation: [String: any Sendable] {
-        return [
+        var dict: [String: any Sendable] = [
             "role": role.rawValue,
             "content": content
         ]
+        
+        if let toolCalls {
+            dict["tool_calls"] = toolCalls
+        }
+        
+        return dict
     }
     
-    public init(role: Role, content: String) {
+    public init(
+        role: Role,
+        content: String,
+        toolCalls: [[String: any Sendable]]? = nil
+    ) {
         self.role = role
         self.content = content
+        self.toolCalls = toolCalls
     }
 }
 
@@ -47,6 +59,7 @@ public enum Role: String, Equatable, Sendable {
     case user
     case assistant
     case system
+    case tool
 }
 
 /**
@@ -57,10 +70,16 @@ public enum Role: String, Equatable, Sendable {
 public struct ToolCallResponse: Sendable {
     public let functionName: String
     public let arguments: [String: JSONValue]
+    public let rawToolCall: [String: any Sendable]?
     
-    public init(_ functionName: String, _ arguments: [String : JSONValue]) {
+    public init(
+        _ functionName: String,
+        _ arguments: [String : JSONValue],
+        _ rawToolCall: [String: any Sendable]?
+    ) {
         self.functionName = functionName
         self.arguments = arguments
+        self.rawToolCall = rawToolCall
     }
 }
 
@@ -90,7 +109,7 @@ public final class MLXChatService {
         
         // Pro Tip: Clear the current cache so the new limit
         // is enforced against a fresh slate.
-        MLX.GPU.clearCache()
+        MLX.Memory.clearCache()
     }
 }
 
@@ -195,8 +214,22 @@ extension MLXChatService {
                 }
                 if let tool = generation.toolCall {
                     let functionName = tool.function.name
+                    let arguments = tool.function.arguments
+                    
+                    let rawToolCall: [String: any Sendable] = [
+                        "type": "function",
+                        "function": [
+                            "name": functionName,
+                            "arguments": arguments
+                        ] as [String: any Sendable]
+                    ]
+                    
                     toolcallCompletionHandler(
-                        ToolCallResponse(functionName, tool.function.arguments)
+                        ToolCallResponse(
+                            functionName,
+                            arguments,
+                            rawToolCall
+                        )
                     )
                 }
             }
