@@ -13,8 +13,8 @@ import Foundation
  */
 public struct MLXChatModel: Identifiable, Hashable {
     public let id = UUID()
-    var relativePath: String
-    
+    public var relativePath: String
+
     public var url: URL {
         URL.documentsDirectory.appendingPathComponent(relativePath)
     }
