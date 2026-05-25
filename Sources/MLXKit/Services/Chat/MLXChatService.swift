@@ -105,8 +105,9 @@ public final class MLXChatService {
     
     public func setMLXMemory(limitInMB: Int) {
         let bytes = limitInMB * 1024 * 1024
+        MLX.Memory.memoryLimit = bytes
         MLX.Memory.cacheLimit = bytes
-        
+
         // Pro Tip: Clear the current cache so the new limit
         // is enforced against a fresh slate.
         MLX.Memory.clearCache()
