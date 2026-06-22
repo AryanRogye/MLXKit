@@ -15,10 +15,19 @@ let package = Package(
             name: "MLXKit",
             targets: ["MLXKit"]
         ),
+        .library(
+            name: "MLXKitC",
+            type: .dynamic,
+            targets: ["MLXKitC"]
+        ),
+        .executable(
+            name: "MLXKitServer",
+            targets: ["MLXKitServer"])
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.31.3"),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "2.31.3")
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "2.31.3"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.99.0")
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -34,5 +43,34 @@ let package = Package(
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
             ]
         ),
+        .target(
+            name: "MLXKitMetalResources",
+            resources: [
+                // Cmlx discovers this nested bundle by name at Metal startup.
+                .copy("Resources/mlx-swift_Cmlx.bundle")
+            ]
+        ),
+        .executableTarget(
+            name: "MLXKitServer",
+            dependencies: [
+                "MLXKit",
+                "MLXKitMetalResources",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio")
+            ]
+        ),
+        .target(
+            name: "MLXKitC",
+            dependencies: ["MLXKit", "MLXKitMetalResources"]
+        ),
+        .testTarget(
+            name: "MLXKitTests",
+            dependencies: ["MLXKit"]
+        ),
+        .testTarget(
+            name: "MLXKitCTests",
+            dependencies: ["MLXKitC"]
+        )
     ]
 )
