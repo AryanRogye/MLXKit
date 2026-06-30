@@ -189,6 +189,11 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
+Function-tool schemas in the OpenAI `tools` field are passed to the model.
+When it requests a tool, the stream emits `tool_calls` chunks and finishes with
+`"finish_reason":"tool_calls"`; send the assistant tool-call message and the
+corresponding `tool` result back in the next chat request.
+
 ### Metal runtime resource
 
 `MLXKitServer` includes MLX's `default.metallib` shader library as a SwiftPM

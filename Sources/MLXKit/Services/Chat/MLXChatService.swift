@@ -80,6 +80,7 @@ public struct ModelMessage {
     public var role: Role
     public var content: String
     public var toolCalls: [[String: any Sendable]]?
+    public var toolCallID: String?
     
     public var representation: [String: any Sendable] {
         var dict: [String: any Sendable] = [
@@ -90,6 +91,9 @@ public struct ModelMessage {
         if let toolCalls {
             dict["tool_calls"] = toolCalls
         }
+        if let toolCallID {
+            dict["tool_call_id"] = toolCallID
+        }
         
         return dict
     }
@@ -97,11 +101,13 @@ public struct ModelMessage {
     public init(
         role: Role,
         content: String,
-        toolCalls: [[String: any Sendable]]? = nil
+        toolCalls: [[String: any Sendable]]? = nil,
+        toolCallID: String? = nil
     ) {
         self.role = role
         self.content = content
         self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
     }
 }
 

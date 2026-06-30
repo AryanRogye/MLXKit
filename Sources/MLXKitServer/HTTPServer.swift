@@ -39,9 +39,13 @@ final class HTTPServer: @unchecked Sendable {
 
     @MainActor
     fileprivate func complete(_ request: ChatCompletionRequest) async throws -> ChatCompletionResponse {
-        let (messages, options) = try generationInputs(for: request)
+        let input = try generationInputs(for: request)
 
-        let content = try await service.respond(messages: messages, options: options)
+        let content = try await service.respond(
+            messages: input.messages,
+            tools: input.tools,
+            options: input.options
+        )
         return ChatCompletionResponse(model: request.model ?? modelName, content: content)
     }
 
@@ -50,14 +54,16 @@ final class HTTPServer: @unchecked Sendable {
         _ request: ChatCompletionRequest,
         emit: @Sendable @escaping (ChatCompletionStreamChunk) -> Void
     ) async throws {
-        let (messages, options) = try generationInputs(for: request)
+        let input = try generationInputs(for: request)
         let id = "chatcmpl-\(UUID().uuidString.lowercased())"
         let model = request.model ?? modelName
+        let toolCallState = ToolCallState()
 
         emit(.role(id: id, model: model))
         _ = try await service.respond(
-            messages: messages,
-            options: options,
+            messages: input.messages,
+            tools: input.tools,
+            options: input.options,
             onToken: { text in
                 emit(.content(id: id, model: model, text: text))
             },
@@ -68,7 +74,7 @@ final class HTTPServer: @unchecked Sendable {
                     id: id,
                     model: model,
                     toolCall: .init(
-                        index: 0,
+                        index: toolCallState.nextIndex(),
                         id: UUID().uuidString.lowercased(),
                         type: "function",
                         function: .init(name: call.functionName, arguments: arguments)
@@ -76,29 +82,64 @@ final class HTTPServer: @unchecked Sendable {
                 ))
             }
         )
-        emit(.finished(id: id, model: model))
+        emit(.finished(
+            id: id,
+            model: model,
+            reason: toolCallState.didEmitToolCall ? "tool_calls" : "stop"
+        ))
     }
 
     @MainActor
     private func generationInputs(
         for request: ChatCompletionRequest
-    ) throws -> ([ModelMessage], MLXGenerationOptions) {
+    ) throws -> GenerationInput {
         let messages = try request.messages.map { message in
             guard let role = Role(rawValue: message.role) else {
                 throw HTTPError.badRequest("Unsupported message role: \(message.role)")
             }
-            return ModelMessage(role: role, content: message.content)
+            return ModelMessage(
+                role: role,
+                content: message.content ?? "",
+                toolCalls: try message.toolCalls?.map { try $0.modelRepresentation() },
+                toolCallID: message.toolCallID
+            )
         }
 
         var options = defaultOptions
         if let temperature = request.temperature { options.temperature = temperature }
         if let topP = request.topP { options.topP = topP }
         if let maxTokens = request.maxTokens { options.maxTokens = maxTokens }
-        return (messages, options)
+        let tools = try request.tools?.map { try $0.modelRepresentation() } ?? []
+        return GenerationInput(messages: messages, tools: tools, options: options)
     }
 
     fileprivate func modelsResponse() -> ModelsResponse {
         ModelsResponse(model: modelName)
+    }
+}
+
+private struct GenerationInput {
+    let messages: [ModelMessage]
+    let tools: [[String: any Sendable]]
+    let options: MLXGenerationOptions
+}
+
+private final class ToolCallState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func nextIndex() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let index = count
+        count += 1
+        return index
+    }
+
+    var didEmitToolCall: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return count > 0
     }
 }
 
@@ -277,13 +318,14 @@ private enum HTTPError: Error {
 private struct ChatCompletionRequest: Decodable, Sendable {
     let model: String?
     let messages: [ChatMessage]
+    let tools: [ServerJSONValue]?
     let temperature: Float?
     let topP: Float?
     let maxTokens: Int?
     let stream: Bool
 
     enum CodingKeys: String, CodingKey {
-        case model, messages, temperature, stream
+        case model, messages, tools, temperature, stream
         case topP = "top_p"
         case maxTokens = "max_tokens"
     }
@@ -292,6 +334,7 @@ private struct ChatCompletionRequest: Decodable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         model = try values.decodeIfPresent(String.self, forKey: .model)
         messages = try values.decode([ChatMessage].self, forKey: .messages)
+        tools = try values.decodeIfPresent([ServerJSONValue].self, forKey: .tools)
         temperature = try values.decodeIfPresent(Float.self, forKey: .temperature)
         topP = try values.decodeIfPresent(Float.self, forKey: .topP)
         maxTokens = try values.decodeIfPresent(Int.self, forKey: .maxTokens)
@@ -301,7 +344,101 @@ private struct ChatCompletionRequest: Decodable, Sendable {
 
 private struct ChatMessage: Decodable, Sendable {
     let role: String
-    let content: String
+    let content: String?
+    let toolCallID: String?
+    let toolCalls: [OpenAIToolCall]?
+
+    enum CodingKeys: String, CodingKey {
+        case role, content
+        case toolCallID = "tool_call_id"
+        case toolCalls = "tool_calls"
+    }
+}
+
+private struct OpenAIToolCall: Decodable, Sendable {
+    let id: String
+    let type: String
+    let function: Function
+
+    struct Function: Decodable, Sendable {
+        let name: String
+        let arguments: String
+    }
+
+    func modelRepresentation() throws -> [String: any Sendable] {
+        let argumentData = Data(function.arguments.utf8)
+        let arguments = try JSONDecoder().decode(ServerJSONValue.self, from: argumentData)
+        return [
+            "id": id,
+            "type": type,
+            "function": [
+                "name": function.name,
+                "arguments": arguments.sendableRepresentation
+            ] as [String: any Sendable]
+        ]
+    }
+}
+
+private enum ServerJSONValue: Decodable, Sendable {
+    case null
+    case bool(Bool)
+    case int(Int)
+    case double(Double)
+    case string(String)
+    case array([ServerJSONValue])
+    case object([String: ServerJSONValue])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Int.self) {
+            self = .int(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .double(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([ServerJSONValue].self) {
+            self = .array(value)
+        } else if let value = try? container.decode([String: ServerJSONValue].self) {
+            self = .object(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unsupported JSON value."
+            )
+        }
+    }
+}
+
+private extension ServerJSONValue {
+    func modelRepresentation() throws -> [String: any Sendable] {
+        guard case .object(let object) = self else {
+            throw HTTPError.badRequest("Each tool must be a JSON object.")
+        }
+        return object.mapValues(\.sendableRepresentation)
+    }
+
+    var sendableRepresentation: any Sendable {
+        switch self {
+        case .null:
+            NSNull()
+        case .bool(let value):
+            value
+        case .int(let value):
+            value
+        case .double(let value):
+            value
+        case .string(let value):
+            value
+        case .array(let values):
+            values.map(\.sendableRepresentation)
+        case .object(let values):
+            values.mapValues(\.sendableRepresentation)
+        }
+    }
 }
 
 private struct ChatCompletionResponse: Encodable {
@@ -354,8 +491,8 @@ private struct ChatCompletionStreamChunk: Encodable {
         .init(id: id, model: model, choices: [.init(delta: .init(toolCalls: [toolCall]))])
     }
 
-    static func finished(id: String, model: String) -> Self {
-        .init(id: id, model: model, choices: [.init(delta: .init(), finishReason: "stop")])
+    static func finished(id: String, model: String, reason: String) -> Self {
+        .init(id: id, model: model, choices: [.init(delta: .init(), finishReason: reason)])
     }
 
     struct Choice: Encodable {

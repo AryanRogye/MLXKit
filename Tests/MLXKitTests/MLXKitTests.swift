@@ -3,10 +3,11 @@ import XCTest
 
 final class MLXKitTests: XCTestCase {
     func testModelMessageBuildsChatTemplateRepresentation() {
-        let message = ModelMessage(role: .user, content: "Hello")
+        let message = ModelMessage(role: .tool, content: "Hello", toolCallID: "call_123")
 
-        XCTAssertEqual(message.representation["role"] as? String, "user")
+        XCTAssertEqual(message.representation["role"] as? String, "tool")
         XCTAssertEqual(message.representation["content"] as? String, "Hello")
+        XCTAssertEqual(message.representation["tool_call_id"] as? String, "call_123")
     }
 
     func testGenerationOptionsPreserveSamplingValues() {
