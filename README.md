@@ -2,7 +2,12 @@
 
 Swift helpers for building **local** LLM apps on Apple platforms using the `mlx-swift` ecosystem.
 
-MLXKit focuses on the annoying parts you hit immediately when building a real app:
+MLXKit now has two ways to use the same local MLX model runtime:
+
+- **Embed `MLXKit`** in a Swift app and receive streamed tokens/tool calls directly.
+- Run **`MLXKitServer`** as an executable for terminal chat or a small OpenAI-compatible local HTTP service.
+
+It focuses on the annoying parts you hit immediately when building a real app:
 
 - **Download** MLX Community models from Hugging Face
 - **Store + list** downloaded models (in your app’s `Documents/models/…`)
@@ -38,6 +43,169 @@ MLXKit itself depends on:
 - `mlx-swift-lm`
 
 ## Quick Start
+
+### Embedded in a Swift app
+
+`MLXChatService` is `@MainActor`, which makes it natural to own from a SwiftUI
+view model. It can load a local MLX model folder or download/cache a Hugging
+Face MLX repository directly.
+
+```swift
+import MLXKit
+
+@MainActor
+func answer() async throws {
+    let chat = MLXChatService()
+    try await chat.loadModel(
+        from: .hub(id: "mlx-community/Llama-3.2-3B-Instruct-4bit"),
+        defaultPrompt: "You are a concise assistant."
+    )
+
+    let response = try await chat.respond(
+        messages: [.init(role: .user, content: "Explain async/await in Swift.")],
+        options: .init(maxTokens: 512, temperature: 0.4),
+        onToken: { chunk in
+            // Append `chunk` to your UI as it arrives.
+            print(chunk, terminator: "")
+        },
+        onToolCall: { call in
+            print("Requested tool:", call.functionName, call.arguments)
+        }
+    )
+    print("\nFinal answer:", response)
+}
+```
+
+Use a downloaded folder instead when the model is managed by your app:
+
+```swift
+try await chat.loadModel(from: .directory(localModelURL))
+```
+
+`getResponse(...)` remains available as the compatibility API used by existing
+MLXKit apps. Its `tokens` and `temperature` settings now feed the actual MLX
+generation parameters.
+
+### Command-line executable
+
+Build or run the executable with SwiftPM:
+
+```bash
+swift run MLXKitServer \
+  --model mlx-community/Llama-3.2-3B-Instruct-4bit \
+  --prompt "Write a haiku about Metal."
+```
+
+Pass a filesystem path to `--model` to use a model that is already downloaded:
+
+```bash
+swift run MLXKitServer \
+  --model ~/Models/Llama-3.2-3B-Instruct-4bit \
+  --interactive
+```
+
+The executable streams terminal output by default. `--no-stream`,
+`--temperature`, `--top-p`, `--top-k`, `--max-tokens`, and `--system` map to
+the same generation settings as `MLXGenerationOptions`.
+
+### C / C++ dynamic library
+
+Build the C ABI product with:
+
+```bash
+swift build --product MLXKitC
+```
+
+This produces `libMLXKitC.dylib` in `.build/arm64-apple-macosx/debug/`. Its
+header is [MLXKitC.h](Sources/MLXKitC/include/MLXKitC.h). The ABI is
+asynchronous: calls return after being accepted, then a completion callback
+reports success or failure. Generation sends UTF-8 token fragments through a
+separate callback.
+
+```c
+#include "MLXKitC.h"
+
+void finished(void *context, int32_t status, const char *error) {
+    // status == 0 on success; copy `error` before returning if non-NULL.
+}
+
+void token(void *context, const char *fragment) {
+    // Copy or consume this streamed UTF-8 fragment before returning.
+}
+
+void *runtime = mlxkit_runtime_create();
+mlxkit_runtime_load_model(runtime, "/path/to/MLX-model", finished, NULL);
+// After `finished` reports success:
+mlxkit_runtime_chat(
+    runtime,
+    "[{\"role\":\"user\",\"content\":\"Hello\"}]",
+    0.6f, 512, token, finished, NULL
+);
+// Destroy only after outstanding callbacks have completed.
+mlxkit_runtime_destroy(runtime);
+```
+
+The dynamic library also requires the generated
+`MLXKit_MLXKitMetalResources.bundle` alongside the host executable/app's
+resources when you distribute it; that bundle contains MLX's Metal shaders.
+The C ABI currently supports text chat, local model folders, Hugging Face
+model IDs, and token streaming.
+
+### Local HTTP service
+
+For local integration testing, start a server with a model loaded once:
+
+```bash
+swift run MLXKitServer \
+  --model mlx-community/Llama-3.2-3B-Instruct-4bit \
+  --serve --port 8080
+```
+
+It exposes `GET /v1/models` and an OpenAI-compatible
+`POST /v1/chat/completions` endpoint. Set `stream` to `true` for Server-Sent
+Events (SSE) `data:` chunks followed by `data: [DONE]`—the format expected by
+clients such as MLXStudio:
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "local-mlx",
+    "messages": [{"role": "user", "content": "Hello from curl"}],
+    "max_tokens": 128,
+    "temperature": 0.4
+  }'
+```
+
+For a streaming request:
+
+```bash
+curl -N http://127.0.0.1:8080/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "local-mlx",
+    "messages": [{"role": "user", "content": "Hello from curl"}],
+    "stream": true
+  }'
+```
+
+Function-tool schemas in the OpenAI `tools` field are passed to the model.
+When it requests a tool, the stream emits `tool_calls` chunks and finishes with
+`"finish_reason":"tool_calls"`; send the assistant tool-call message and the
+corresponding `tool` result back in the next chat request.
+
+### Metal runtime resource
+
+`MLXKitServer` includes MLX's `default.metallib` shader library as a SwiftPM
+resource. This is required for `swift run` to initialize Metal; without it,
+MLX reports `Failed to load the default metallib` before a model is loaded.
+
+If you update the pinned `mlx-swift` package, regenerate the committed resource
+with Xcode's Metal Toolchain installed:
+
+```bash
+./Scripts/generate-mlx-metallib.sh
+```
 
 ### 1) Download + Select A Model (UI-Friendly)
 
@@ -153,4 +321,3 @@ let _ = try await chat.getResponse(
 - Model storage is currently based on `URL.documentsDirectory` (iOS/macOS sandbox documents).
 - The `Package.swift` platform minimums are currently set to v26. If you need older OS support, you’ll want to lower those and verify `Observation/@Observable` usage. I do it cuz I have had no need to support older Versions.
 - Please Open a issue if you need an older OS Version.
-
